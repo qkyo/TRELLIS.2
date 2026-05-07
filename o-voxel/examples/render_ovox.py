@@ -4,10 +4,11 @@ import imageio
 import o_voxel
 import utils3d
 
-RES = 512
+RES = 1024
 
 # Load data
-coords, data = o_voxel.io.read("ovoxel_helmet.vxz")
+# coords, data = o_voxel.io.read("ovoxel_helmet.vxz")
+coords, data = o_voxel.io.read_vxz("/mnt/d/TexVerse_100/pbr_voxels_1024/04ecff4bb5914b4fa3e2d4cfa8e4738d_1024.vxz")
 position = (coords / RES - 0.5).cuda()
 base_color = (data['base_color'] / 255).cuda()
 
@@ -36,4 +37,4 @@ output = renderer.render(
 image = np.clip(
     output.attr.permute(1, 2, 0).cpu().numpy() * 255, 0, 255
 ).astype(np.uint8)
-imageio.imwrite("ovoxel_helmet_visualization.png", image)
+imageio.imwrite("../../../Output/render/ovoxel_helmet_visualization.png", image)

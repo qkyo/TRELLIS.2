@@ -17,6 +17,8 @@ if __name__ == '__main__':
                         help='Directory to save the pbr dumps')
     parser.add_argument('--instances', type=str, default=None,
                         help='Instances to process')
+    parser.add_argument('--pbr_only', action='store_true',
+                        help='Only process assets with PBR dumps and ignore mesh dumps')
     parser.add_argument('--rank', type=int, default=0)
     parser.add_argument('--world_size', type=int, default=1)
     parser.add_argument('--max_workers', type=int, default=0)
@@ -38,10 +40,17 @@ if __name__ == '__main__':
     if os.path.exists(os.path.join(opt.pbr_dump_root, 'pbr_dumps', 'metadata.csv')):
         metadata = metadata.combine_first(pd.read_csv(os.path.join(opt.pbr_dump_root, 'pbr_dumps', 'metadata.csv')).set_index('sha256'))
     metadata = metadata.reset_index()
+    if 'pbr_dumped' not in metadata.columns:
+        metadata['pbr_dumped'] = False
+    if not opt.pbr_only and 'mesh_dumped' not in metadata.columns:
+        metadata['mesh_dumped'] = False
     if opt.instances is None:
         if 'num_faces' in metadata.columns:
             metadata = metadata[metadata['num_faces'].isnull()]
-        metadata = metadata[(metadata['mesh_dumped'] == True) | (metadata['pbr_dumped'] == True)]
+        if opt.pbr_only:
+            metadata = metadata[metadata['pbr_dumped'] == True]
+        else:
+            metadata = metadata[(metadata['mesh_dumped'] == True) | (metadata['pbr_dumped'] == True)]
     else:
         if os.path.exists(opt.instances):
             with open(opt.instances, 'r') as f:
@@ -63,7 +72,7 @@ if __name__ == '__main__':
         def worker(metadatum):
             try:
                 sha256 = metadatum['sha256']
-                if metadatum['pbr_dumped'] == True:
+                if opt.pbr_only or metadatum['pbr_dumped'] == True:
                     with open(os.path.join(opt.pbr_dump_root, 'pbr_dumps', f'{sha256}.pickle'), 'rb') as f:
                         dump = pickle.load(f)
 

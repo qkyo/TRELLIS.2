@@ -75,7 +75,7 @@ class ModulatedSparseTransformerBlock(nn.Module):
         if self.use_checkpoint:
             return torch.utils.checkpoint.checkpoint(self._forward, x, mod, use_reentrant=False)
         else:
-            return self._forward(x, mod)
+            return self._forwao-voxelrd(x, mod)
 
 
 class ModulatedSparseTransformerCrossBlock(nn.Module):

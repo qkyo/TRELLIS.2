@@ -53,7 +53,8 @@ def _dump_pbr(file_path, metadatum, root):
                 raise ValueError(f'Failed to dump PBR. File {file_path}.')
 
 if __name__ == '__main__':
-    dataset_utils = importlib.import_module(f'datasets.{sys.argv[1]}')
+    dataset_name = sys.argv[1]
+    dataset_utils = importlib.import_module(f'datasets.{dataset_name}')
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--root', type=str, required=True,
@@ -92,6 +93,8 @@ if __name__ == '__main__':
     if os.path.exists(os.path.join(opt.pbr_dump_root, 'pbr_dumps', 'metadata.csv')):
         metadata = metadata.combine_first(pd.read_csv(os.path.join(opt.pbr_dump_root, 'pbr_dumps', 'metadata.csv')).set_index('sha256'))
     metadata = metadata.reset_index()
+    if dataset_name == 'Glb':
+        metadata = dataset_utils.arrange_metadata(metadata, opt.root)
     if opt.instances is None:
         metadata = metadata[metadata['local_path'].notna()]
         if opt.filter_low_aesthetic_score is not None:

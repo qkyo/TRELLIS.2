@@ -184,6 +184,10 @@ class PbrVaeTrainer(BasicTrainer):
         
         # rendering loss
         if self.lambda_render != 0.0:
+            # 遍历 mesh 和 y，
+            # 每次取：m = mesh里的一个元素，v = y里的一个元素
+            # 然后生成一个 MeshWithVoxel(...) 对象。
+            # 最后全部塞进 list。
             recon = [MeshWithVoxel(
                 m.vertices,
                 m.faces,

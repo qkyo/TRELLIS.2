@@ -155,15 +155,21 @@ Render multi-view images to train the image-conditioned generator.
 *Note: This process may utilize the CPU.*
 
 ```bash
-python data_toolkit/render_cond.py <SUBSET> --root <ROOT> [--num_views <NUM_VIEWS>] [--rank <RANK> --world_size <WORLD_SIZE>]
+python data_toolkit/render_cond.py <SUBSET> --root <ROOT> [--num_cond_views <NUM_VIEWS>] [--seed <SEED>] [--transforms_root <TRANSFORMS_ROOT>] [--render_mode <RENDER_MODE>] [--overwrite] [--rank <RANK> --world_size <WORLD_SIZE>]
 ```
 
 **Arguments:**
-- `NUM_VIEWS`: Number of views to render per asset. Default is `16`.
+- `NUM_VIEWS`: Number of views to render per asset when `TRANSFORMS_ROOT` is not provided. Default is `16`.
+- `SEED`: Optional seed for deterministic camera sampling and Blender-side random lighting. Each asset derives its own seed from this value and its sha256.
+- `TRANSFORMS_ROOT`: Optional root containing `renders_cond/<sha256>/transforms.json`. When set, the script automatically reuses per-asset camera parameters by sha256 instead of randomly sampling new views.
+- `RENDER_MODE`: Rendering mode. Options are `lit`, `uniform_lit`, and `mra`. Default is `lit`; `uniform_lit` keeps the same lit materials but disables per-view random lights, and `mra` renders metallic, roughness, and alpha in RGB.
+- Output directory: `lit` writes to `renders_cond`; other modes write to `renders_cond_<mode>`.
+- `overwrite`: Render even if the output `transforms.json` already exists.
 
 **Example:**
 ```bash
 python data_toolkit/render_cond.py ObjaverseXL --root datasets/ObjaverseXL_sketchfab
+python data_toolkit/render_cond.py Glb --root datasets/ObjaverseXL_sketchfab --seed 42 --render_mode mra --transforms_root datasets/ObjaverseXL_sketchfab --overwrite
 ```
 
 **Final Metadata Update:**

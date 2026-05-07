@@ -126,6 +126,31 @@ def init_uniform_lighting():
     links.new(bg_node.outputs["Background"], output_node.inputs["Surface"])
 
 
+def init_no_lighting():
+    # Clear explicit lights. Shadeless material modes use emission, so the world can stay dark.
+    bpy.ops.object.select_all(action="DESELECT")
+    bpy.ops.object.select_by_type(type="LIGHT")
+    bpy.ops.object.delete()
+
+    if bpy.context.scene.world is None:
+        world = bpy.data.worlds.new("World")
+        bpy.context.scene.world = world
+    else:
+        world = bpy.context.scene.world
+
+    world.use_nodes = True
+    nodes = world.node_tree.nodes
+    links = world.node_tree.links
+    for node in nodes:
+        nodes.remove(node)
+
+    bg_node = nodes.new(type="ShaderNodeBackground")
+    bg_node.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+    bg_node.inputs["Strength"].default_value = 0.0
+    output_node = nodes.new(type="ShaderNodeOutputWorld")
+    links.new(bg_node.outputs["Background"], output_node.inputs["Surface"])
+
+
 def init_random_lighting(camera_dir: np.ndarray) -> None:
     # Clear existing lights
     bpy.ops.object.select_all(action="DESELECT")
@@ -363,7 +388,141 @@ def get_transform_matrix(obj: bpy.types.Object) -> list:
     return matrix
 
 
+def _get_material_output(mat: bpy.types.Material) -> bpy.types.Node:
+    output = mat.node_tree.nodes.get('Material Output')
+    if output is None:
+        output = mat.node_tree.nodes.new(type='ShaderNodeOutputMaterial')
+    return output
+
+
+def _get_principled_node(mat: bpy.types.Material) -> bpy.types.Node:
+    principled = mat.node_tree.nodes.get('Principled BSDF')
+    if principled is not None:
+        return principled
+    for node in mat.node_tree.nodes:
+        if node.type == 'BSDF_PRINCIPLED':
+            return node
+    return None
+
+
+def _socket_source(socket: bpy.types.NodeSocket):
+    if socket is not None and socket.is_linked:
+        return socket.links[0].from_socket
+    return None
+
+
+def _socket_default(socket: bpy.types.NodeSocket, default):
+    if socket is None:
+        return default
+    return socket.default_value
+
+
+def _socket_scalar_default(socket: bpy.types.NodeSocket, default: float) -> float:
+    value = _socket_default(socket, default)
+    if isinstance(value, (float, int)):
+        return float(value)
+    return float(value[0])
+
+
+def _socket_color_default(socket: bpy.types.NodeSocket, default=(1.0, 1.0, 1.0, 1.0)):
+    value = _socket_default(socket, default)
+    if isinstance(value, (float, int)):
+        return (float(value), float(value), float(value), 1.0)
+    if len(value) == 3:
+        return (value[0], value[1], value[2], 1.0)
+    return value
+
+
+def _ensure_mesh_materials() -> None:
+    default_mat = None
+    for obj in bpy.context.scene.objects:
+        if obj.type != 'MESH':
+            continue
+        if len(obj.data.materials) > 0:
+            continue
+        if default_mat is None:
+            default_mat = bpy.data.materials.new('Default_Material')
+            default_mat.diffuse_color = (1.0, 1.0, 1.0, 1.0)
+        obj.data.materials.append(default_mat)
+
+
+def _set_shadeless_materials(material_mode: str) -> None:
+    _ensure_mesh_materials()
+    for mat in bpy.data.materials:
+        mat.use_nodes = True
+        mat.blend_method = 'BLEND'
+        mat.show_transparent_back = True
+
+        node_tree = mat.node_tree
+        nodes = node_tree.nodes
+        links = node_tree.links
+        principled = _get_principled_node(mat)
+        output = _get_material_output(mat)
+
+        base_socket = principled.inputs.get('Base Color') if principled else None
+        metallic_socket = principled.inputs.get('Metallic') if principled else None
+        roughness_socket = principled.inputs.get('Roughness') if principled else None
+        alpha_socket = principled.inputs.get('Alpha') if principled else None
+
+        base_source = _socket_source(base_socket)
+        metallic_source = _socket_source(metallic_socket)
+        roughness_source = _socket_source(roughness_socket)
+        alpha_source = _socket_source(alpha_socket)
+
+        base_default = _socket_color_default(base_socket, mat.diffuse_color)
+        metallic_default = _socket_scalar_default(metallic_socket, 0.0)
+        roughness_default = _socket_scalar_default(roughness_socket, 0.5)
+        alpha_default = _socket_scalar_default(alpha_socket, mat.diffuse_color[3])
+
+        for link in list(output.inputs['Surface'].links):
+            links.remove(link)
+
+        emission = nodes.new(type='ShaderNodeEmission')
+        emission.inputs['Strength'].default_value = 1.0
+
+        if material_mode == 'mra':
+            combine = nodes.new(type='ShaderNodeCombineRGB')
+            if metallic_source is not None:
+                links.new(metallic_source, combine.inputs['R'])
+            else:
+                combine.inputs['R'].default_value = metallic_default
+            if roughness_source is not None:
+                links.new(roughness_source, combine.inputs['G'])
+            else:
+                combine.inputs['G'].default_value = roughness_default
+            if alpha_source is not None:
+                links.new(alpha_source, combine.inputs['B'])
+            else:
+                combine.inputs['B'].default_value = alpha_default
+            links.new(combine.outputs['Image'], emission.inputs['Color'])
+        else:
+            if base_source is not None:
+                links.new(base_source, emission.inputs['Color'])
+            else:
+                emission.inputs['Color'].default_value = base_default
+
+        transparent = nodes.new(type='ShaderNodeBsdfTransparent')
+        mix = nodes.new(type='ShaderNodeMixShader')
+        if alpha_source is not None:
+            links.new(alpha_source, mix.inputs['Fac'])
+        else:
+            mix.inputs['Fac'].default_value = alpha_default
+        links.new(transparent.outputs['BSDF'], mix.inputs[1])
+        links.new(emission.outputs['Emission'], mix.inputs[2])
+        links.new(mix.outputs['Shader'], output.inputs['Surface'])
+
+
+def _set_camera_from_transform(cam: bpy.types.Object, frame: dict) -> None:
+    for constraint in list(cam.constraints):
+        cam.constraints.remove(constraint)
+    cam.matrix_world = Matrix(frame['transform_matrix'])
+    cam.data.lens = 16 / np.tan(frame['camera_angle_x'] / 2)
+
+
 def main(arg):
+    if arg.seed is not None:
+        np.random.seed(arg.seed)
+
     if arg.object.endswith(".blend"):
         delete_invisible_objects()
     else:
@@ -377,11 +536,18 @@ def main(arg):
     
     # Initialize camera and lighting
     cam = init_camera()
-    init_uniform_lighting()
+    use_shadeless = arg.render_mode == 'mra'
+    if use_shadeless:
+        init_no_lighting()
+        _set_shadeless_materials('mra')
+    else:
+        # lit / uniform_lit: same materials as default lit pipeline; uniform_lit skips per-view random lights below
+        init_uniform_lighting()
     print('[INFO] Camera and lighting initialized.')
         
     # ============= Render conditional views =============
     init_render(engine=arg.engine, resolution=arg.cond_resolution)
+    os.makedirs(arg.cond_output_folder, exist_ok=True)
     # Create a list of views
     to_export = {
         "aabb": [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
@@ -389,22 +555,38 @@ def main(arg):
         "offset": [offset.x, offset.y, offset.z],
         "frames": []
     }
-    views = json.loads(arg.cond_views)
+    if arg.transforms_json is not None:
+        with open(arg.transforms_json, 'r') as f:
+            source_transforms = json.load(f)
+        views = source_transforms['frames']
+    else:
+        views = json.loads(arg.cond_views)
+
     for i, view in enumerate(views):
-        cam_dir = np.array([
-            np.cos(view['yaw']) * np.cos(view['pitch']),
-            np.sin(view['yaw']) * np.cos(view['pitch']),
-            np.sin(view['pitch'])
-        ])
-        init_random_lighting(cam_dir)
-        cam.location = (
-            view['radius'] * cam_dir[0],
-            view['radius'] * cam_dir[1],
-            view['radius'] * cam_dir[2]
-        )
-        cam.data.lens = 16 / np.tan(view['fov'] / 2)
+        if arg.transforms_json is not None:
+            _set_camera_from_transform(cam, view)
+            cam_dir = np.array(tuple(cam.location))
+            cam_dir = cam_dir / np.linalg.norm(cam_dir)
+            camera_angle_x = view['camera_angle_x']
+            file_path = view.get('file_path', f'{i:03d}.png')
+        else:
+            cam_dir = np.array([
+                np.cos(view['yaw']) * np.cos(view['pitch']),
+                np.sin(view['yaw']) * np.cos(view['pitch']),
+                np.sin(view['pitch'])
+            ])
+            cam.location = (
+                view['radius'] * cam_dir[0],
+                view['radius'] * cam_dir[1],
+                view['radius'] * cam_dir[2]
+            )
+            cam.data.lens = 16 / np.tan(view['fov'] / 2)
+            camera_angle_x = view['fov']
+            file_path = f'{i:03d}.png'
+        if arg.render_mode == 'lit':
+            init_random_lighting(cam_dir)
         
-        bpy.context.scene.render.filepath = os.path.join(arg.cond_output_folder, f'{i:03d}.png')
+        bpy.context.scene.render.filepath = os.path.join(arg.cond_output_folder, file_path)
             
         # Render the scene
         bpy.ops.render.render(write_still=True)
@@ -412,8 +594,8 @@ def main(arg):
             
         # Save camera parameters
         metadata = {
-            "file_path": f'{i:03d}.png',
-            "camera_angle_x": view['fov'],
+            "file_path": file_path,
+            "camera_angle_x": camera_angle_x,
             "transform_matrix": get_transform_matrix(cam)
         }
         to_export["frames"].append(metadata)
@@ -427,11 +609,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Renders given obj file by rotation a camera around it.')
     parser.add_argument('--object', type=str, help='Path to the 3D model file to be rendered.')
     parser.add_argument('--cond_views', type=str, help='JSON string of views. Contains a list of {yaw, pitch, radius, fov} object.')
+    parser.add_argument('--transforms_json', type=str, default=None, help='Path to an existing transforms.json to reuse camera parameters.')
     parser.add_argument('--cond_output_folder', type=str, default='/tmp', help='The path the output will be dumped to.')
     parser.add_argument('--cond_resolution', type=int, default=1024, help='Resolution of the conditional images.')
     parser.add_argument('--engine', type=str, default='CYCLES', help='Blender internal engine for rendering. E.g. CYCLES, BLENDER_EEVEE, ...')
+    parser.add_argument('--render_mode', type=str, default='lit', choices=['lit', 'uniform_lit', 'mra'], help='lit: uniform env + random lights per view; uniform_lit: same lit materials but uniform env only; mra: shadeless channel output.')
+    parser.add_argument('--seed', type=int, default=None, help='Optional seed for Blender-side random lighting.')
     argv = sys.argv[sys.argv.index("--") + 1:]
     args = parser.parse_args(argv)
-
     main(args)
     
